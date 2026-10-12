@@ -92,6 +92,45 @@
             </form>
         </div>
 
+        <section class="glass shadow-xl rounded-2xl p-6 md:p-8 mb-8" aria-labelledby="myOrdersHeading">
+            <div class="flex flex-wrap items-center justify-between gap-3 mb-4">
+                <div>
+                    <h2 id="myOrdersHeading" class="text-xl font-semibold text-slate-800">📋 Илгээсэн захиалгууд</h2>
+                    
+                </div>
+                <button type="button" id="loadMyOrders" class="bg-indigo-600 hover:bg-indigo-700 text-white font-medium px-5 py-2.5 rounded-xl transition">
+                    Шинэчлэх
+                </button>
+            </div>
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4 mb-4">
+                <div>
+                    <label for="ordersDate" class="block text-sm font-medium text-slate-700 mb-1">Хоолны өдөр</label>
+                    <input type="date" id="ordersDate" required class="w-full px-3 py-2.5 rounded-xl border border-slate-200 bg-white/80">
+                </div>
+                <div>
+                    <label for="ordersDepartment" class="block text-sm font-medium text-slate-700 mb-1">Тасаг / Салбар</label>
+                    <select id="ordersDepartment" class="w-full px-3 py-2.5 rounded-xl border border-slate-200 bg-white/80">
+                        <option value="">Бүх салбар</option>
+                    </select>
+                </div>
+                <div hidden>
+                    <label for="ordersEmployee" class="block text-sm font-medium text-slate-700 mb-1">Ажилтан</label>
+                    <select id="ordersEmployee" class="w-full px-3 py-2.5 rounded-xl border border-slate-200 bg-white/80">
+                        <option value="">Бүх ажилтан</option>
+                    </select>
+                </div>
+                <div hidden>
+                    <label for="ordersMeal" class="block text-sm font-medium text-slate-700 mb-1">Хоол</label>
+                    <select id="ordersMeal" class="w-full px-3 py-2.5 rounded-xl border border-slate-200 bg-white/80">
+                        <option value="">Бүх хоол</option>
+                    </select>
+                </div>
+            </div>
+            <div id="myOrdersContainer" aria-live="polite">
+                <p class="text-sm text-slate-500">Захиалгуудыг ачаалж байна...</p>
+            </div>
+        </section>
+
         <!-- Сэтгэгдэл үлдээх хэсэг -->
         <div class="glass shadow-xl rounded-2xl p-6 md:p-8">
             <h2 class="text-xl font-semibold text-slate-800 mb-4 flex items-center gap-2">
@@ -188,6 +227,117 @@
             `).join('');
         }
 
+        let loadedOrders = [];
+        let ordersRequestId = 0;
+        let ordersLoaded = false;
+        const ordersDateInput = document.getElementById('ordersDate');
+        const ordersDepartment = document.getElementById('ordersDepartment');
+        const ordersEmployee = document.getElementById('ordersEmployee');
+        const ordersMeal = document.getElementById('ordersMeal');
+
+        function updateOrderOptions(select, entries, allLabel) {
+            const previousValue = select.value;
+            select.replaceChildren(new Option(allLabel, ''));
+            entries.forEach(([value, label]) => select.add(new Option(label, value)));
+            select.value = entries.some(([value]) => value === previousValue) ? previousValue : '';
+        }
+
+        function renderOrders() {
+            if (!ordersLoaded) return;
+            const container = document.getElementById('myOrdersContainer');
+            const departmentOrders = loadedOrders.filter(order => !ordersDepartment.value || order.department === ordersDepartment.value);
+            const employees = [...new Set(departmentOrders.map(order => order.employee_name))].sort((a, b) => a.localeCompare(b, 'mn'));
+            updateOrderOptions(ordersEmployee, employees.map(name => [name, name]), 'Бүх ажилтан');
+            const employeeOrders = departmentOrders.filter(order => !ordersEmployee.value || order.employee_name === ordersEmployee.value);
+            const meals = new Map(employeeOrders.map(order => [String(order.meal_id), order.menu_items.title]));
+            updateOrderOptions(ordersMeal, [...meals].sort((a, b) => a[1].localeCompare(b[1], 'mn')), 'Бүх хоол');
+            const orders = employeeOrders.filter(order => !ordersMeal.value || String(order.meal_id) === ordersMeal.value);
+
+            if (orders.length === 0) {
+                container.textContent = 'Сонгосон нөхцөлөөр захиалга олдсонгүй.';
+                return;
+            }
+
+            const summary = document.createElement('p');
+            summary.className = 'text-sm font-semibold text-indigo-700 mb-3';
+            summary.textContent = `Нийт: ${orders.length} захиалга, ${orders.reduce((total, order) => total + order.quantity, 0)} порц`;
+            const wrapper = document.createElement('div');
+            wrapper.className = 'overflow-x-auto';
+            const table = document.createElement('table');
+            table.className = 'w-full text-left text-sm';
+            table.innerHTML = '<thead><tr class="border-b border-slate-200 text-slate-500"><th scope="col" class="p-2">Салбар</th><th scope="col" class="p-2">Ажилтан</th><th scope="col" class="p-2">Хоол</th><th scope="col" class="p-2">Порц</th></tr></thead>';
+            const body = document.createElement('tbody');
+            orders.forEach(order => {
+                const row = document.createElement('tr');
+                row.className = 'border-b border-slate-100';
+                [order.department, order.employee_name, order.menu_items.title, order.quantity].forEach(value => {
+                    const cell = document.createElement('td');
+                    cell.className = 'p-2';
+                    cell.textContent = value;
+                    row.appendChild(cell);
+                });
+                body.appendChild(row);
+            });
+            table.appendChild(body);
+            wrapper.appendChild(table);
+            container.replaceChildren(summary, wrapper);
+        }
+
+        async function loadMyOrders() {
+            const requestId = ++ordersRequestId;
+            const container = document.getElementById('myOrdersContainer');
+            const button = document.getElementById('loadMyOrders');
+            ordersLoaded = false;
+            loadedOrders = [];
+            if (!ordersDateInput.value) {
+                button.disabled = false;
+                button.textContent = 'Шинэчлэх';
+                container.textContent = 'Хоолны өдрөө сонгоно уу.';
+                return;
+            }
+            const date = ordersDateInput.value;
+            button.disabled = true;
+            button.textContent = 'Ачаалж байна...';
+            container.textContent = 'Захиалгуудыг ачаалж байна...';
+
+            try {
+                const orders = [];
+                const pageSize = 500;
+                for (let offset = 0; ; offset += pageSize) {
+                    const { data, error } = await _supabase
+                        .from('orders')
+                        .select('id, department, employee_name, meal_id, quantity, menu_items!inner(title, date)')
+                        .eq('menu_items.date', date)
+                        .order('id')
+                        .range(offset, offset + pageSize - 1);
+                    if (requestId !== ordersRequestId) return;
+                    if (error) throw error;
+                    orders.push(...data);
+                    if (data.length < pageSize) break;
+                }
+                loadedOrders = orders;
+                ordersLoaded = true;
+                renderOrders();
+            } catch (error) {
+                if (requestId !== ordersRequestId) return;
+                console.error('Захиалга татахад алдаа гарлаа:', error);
+                container.textContent = 'Захиалгуудыг ачаалж чадсангүй: ' + error.message;
+            } finally {
+                if (requestId === ordersRequestId) {
+                    button.disabled = false;
+                    button.textContent = 'Шинэчлэх';
+                }
+            }
+        }
+
+        ordersDateInput.value = getLocalDateString();
+        Array.from(document.getElementById('department').options).forEach(option => {
+            ordersDepartment.add(new Option(option.textContent, option.value));
+        });
+        ordersDateInput.addEventListener('change', () => loadMyOrders());
+        [ordersDepartment, ordersEmployee, ordersMeal].forEach(select => select.addEventListener('change', renderOrders));
+        document.getElementById('loadMyOrders').addEventListener('click', () => loadMyOrders());
+
         function selectMeal(id, element) {
             document.querySelectorAll('.meal-card').forEach(c => c.classList.remove('border-indigo-600', 'bg-indigo-50/50'));
             element.classList.add('border-indigo-600', 'bg-indigo-50/50');
@@ -230,9 +380,16 @@
                 alert('Захиалга амжилттай бүртгэгдлээ. Баярлалаа!');
                 const selectedDate = menuDateInput.value;
                 document.getElementById('orderForm').reset();
+                document.getElementById('department').value = department;
+                document.getElementById('employeeName').value = employeeName;
                 menuDateInput.value = selectedDate;
                 document.querySelectorAll('.meal-card').forEach(c => c.classList.remove('border-indigo-600', 'bg-indigo-50/50'));
                 selectedMealId = null;
+                ordersDateInput.value = selectedDate;
+                ordersDepartment.value = '';
+                ordersEmployee.value = '';
+                ordersMeal.value = '';
+                await loadMyOrders();
             }
         });
 
@@ -253,6 +410,7 @@
         });
 
         loadMenu();
+        loadMyOrders();
     </script>
 </body>
 </html>
